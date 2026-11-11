@@ -1,0 +1,7 @@
+apiVersion: 1
+datasources:
+  - name: Демо-данные
+    uid: demo
+    type: grafana-testdata-datasource
+    isDefault: true
+    editable: false

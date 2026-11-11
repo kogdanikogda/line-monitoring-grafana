@@ -1,0 +1,8 @@
+{
+	http_port 80
+	https_port 8443
+}
+77-238-227-42.sslip.io:8443 {
+	encode gzip
+	reverse_proxy neuroprom-grafana:3000
+}

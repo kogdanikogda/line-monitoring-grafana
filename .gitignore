@@ -1,0 +1,5 @@
+deploy/admin.pass
+deploy/plugins/
+deploy/dashboards/
+.DS_Store
+__pycache__/
