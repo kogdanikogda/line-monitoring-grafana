@@ -644,7 +644,8 @@ def journal():
 
 
 # --- camera: still frame generated in Figma + overlay driven by the operator data (HTML graphics) ---
-CAM_IMG = Path(__file__).resolve().parent.parent / "assets" / "camera.jpg"
+CAM_IMG = Path(__file__).resolve().parent.parent / "assets" / "camera.jpg"        # empty zone
+CAM_IMG_OP = Path(__file__).resolve().parent.parent / "assets" / "camera-op.jpg"  # same frame, operator at the control cabinet
 CAM_CSS = r"""
 :host{all:initial}
 #v{font-family:Inter,"Helvetica Neue",Arial,sans-serif;color:#121519;display:flex;flex-direction:column;gap:8px;height:100%}
@@ -666,7 +667,7 @@ CAM_CSS = r"""
 .cl{margin-left:auto;border:0;background:none;color:#5F5E5A;font-size:12px;cursor:pointer;text-decoration:underline}
 """
 CAM_JS = r"""
-const H = htmlGraphics, root = htmlNode.getElementById('v'), img = htmlNode.getElementById('cam').src;
+const H = htmlGraphics, root = htmlNode.getElementById('v'), IMG0 = htmlNode.getElementById('cam').src, IMG1 = htmlNode.getElementById('camop').src;
 const TS = getTemplateSrv(), LS = H.locationService;
 const clip = +TS.replace('${clip}') || 0, scale = TS.replace('${scale}');
 const OPN = 'Оператор (камера)';
@@ -680,21 +681,14 @@ const clock = t => { const d = new Date(t); return pad2(d.getDate()) + '.' + pad
 const hm = t => { const d = new Date(t); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); };
 const dur = m => { m = Math.round(m); return m < 60 ? m + ' мин' : Math.floor(m / 60) + ' ч ' + pad2(m % 60) + ' мин'; };
 function present(t) { let v = 'У линии'; for (const r of op) { if (r.time <= t) v = r[OPN]; else break; } return v === 'У линии'; }
-// operator figure next to the control cabinet + detection box; the zone turns red when he is out
+// zone at the control cabinet; detection box around the operator when he is in the photo (frame camera-op.jpg)
 const ZONE = '300,330 470,300 610,340 440,420';
 function overlay(on) {
   return '<svg viewBox="0 0 1024 576" preserveAspectRatio="xMidYMid slice">' +
-    '<polygon points="' + ZONE + '" fill="' + (on ? 'rgba(242,193,78,.12)' : 'rgba(200,55,45,.22)') + '" stroke="' + (on ? '#F2C14E' : '#E5484D') + '" stroke-width="3" stroke-dasharray="10 6"/>' +
+    '<polygon points="' + ZONE + '" fill="' + (on ? 'rgba(242,193,78,.10)' : 'rgba(200,55,45,.22)') + '" stroke="' + (on ? '#F2C14E' : '#E5484D') + '" stroke-width="3" stroke-dasharray="10 6"/>' +
     '<text x="312" y="438" font-family="Inter,Arial" font-size="15" font-weight="600" fill="' + (on ? '#F2C14E' : '#FF6B66') + '">Зона оператора</text>' +
-    (on ? '<g transform="translate(372,262)">' +
-      '<ellipse cx="0" cy="92" rx="16" ry="5" fill="rgba(0,0,0,.35)"/>' +
-      '<rect x="-9" y="52" width="7" height="40" rx="3" fill="#2B2F36"/><rect x="2" y="52" width="7" height="40" rx="3" fill="#2B2F36"/>' +
-      '<path d="M-13 18 Q-13 12 -7 12 L7 12 Q13 12 13 18 L13 56 L-13 56 Z" fill="#F08A24"/>' +
-      '<rect x="-13" y="34" width="26" height="3" fill="#E9EEF2"/><rect x="-13" y="44" width="26" height="3" fill="#E9EEF2"/>' +
-      '<rect x="-19" y="16" width="6" height="30" rx="3" fill="#3A3F47"/><rect x="13" y="16" width="6" height="30" rx="3" fill="#3A3F47"/>' +
-      '<circle cx="0" cy="3" r="9" fill="#C99A7A"/><path d="M-10 1 Q0 -12 10 1 Z" fill="#F2F2F0"/></g>' +
-      '<rect x="345" y="248" width="56" height="112" fill="none" stroke="#3DDC84" stroke-width="2"/>' +
-      '<rect x="345" y="230" width="104" height="18" fill="#3DDC84"/><text x="350" y="244" font-family="Inter,Arial" font-size="12" font-weight="600" fill="#0B2A17">оператор 0.94</text>' : '') +
+    (on ? '<rect x="341" y="236" width="72" height="118" fill="none" stroke="#3DDC84" stroke-width="2"/>' +
+      '<rect x="341" y="218" width="104" height="18" fill="#3DDC84"/><text x="346" y="232" font-family="Inter,Arial" font-size="12" font-weight="600" fill="#0B2A17">оператор 0.94</text>' : '') +
     '</svg>';
 }
 cancelAnimationFrame(window.__nprVidRaf || 0);
@@ -704,7 +698,7 @@ if (!ev) {
   const hint = scale === 'shift' ? 'Нажмите «▶ Смотреть» у остановки в журнале — покажу запись камеры за эти минуты.'
                                  : 'Записи камеры открываются для остановок за смену или сутки: выберите «Смена» или «Сутки».';
   root.innerHTML = '<div class="inf"><span class="m">' + hint + '</span></div>' +
-    '<div class="scr"><img src="' + img + '">' + overlay(true) + '<div class="ts"><i></i>КАМ‑1 · Линия Цесис 2</div><div class="dm">Демо: кадр сгенерирован, здесь будет запись камеры</div></div>';
+    '<div class="scr"><img src="' + IMG1 + '">' + overlay(true) + '<div class="ts"><i></i>КАМ‑1 · Линия Цесис 2</div><div class="dm">Демо: кадр сгенерирован, здесь будет запись камеры</div></div>';
 } else {
   const t0 = ev.time - 60e3, t1 = ev['Конец'] + 60e3, span = t1 - t0, mins = ev['Мин'], noop = +ev['Без оператора'] || 0;
   const pct = mins ? Math.round(noop / mins * 100) : 0;
@@ -712,17 +706,17 @@ if (!ev) {
   let abs = '', prev = null;
   for (let t = t0; t <= t1; t += 15e3) { const on = present(t); if (!on && prev === null) prev = t; if ((on || t + 15e3 > t1) && prev !== null) { abs += '<div class="a" style="left:' + x(prev) + ';width:calc(' + x(t) + ' - ' + x(prev) + ')"></div>'; prev = null; } }
   root.innerHTML = '<div class="inf"><b>' + hm(ev.time) + '–' + hm(ev['Конец']) + ' · ' + ev['Состояние'] + '</b> · ' + (ev['Причина'] || '') +
-    '<br><span class="m">Оператора не было у линии ' + (pct ? pct + '% времени (' + dur(noop) + ')' : '— был всё время') + '. Запись ускорена.</span></div>' +
-    '<div class="scr"><img src="' + img + '"><div id="ov"></div><div class="ts"><i></i>КАМ‑1 · <span id="tc"></span></div><div class="st" id="st"></div>' +
+    '<br><span class="m">За всю остановку оператора не было ' + (pct ? pct + '% времени (' + dur(noop) + ')' : 'ни минуты') + '. Запись ускорена.</span></div>' +
+    '<div class="scr"><img id="im" src="' + IMG1 + '"><div id="ov"></div><div class="ts"><i></i>КАМ‑1 · <span id="tc"></span></div><div class="st" id="st"></div>' +
     '<div class="dm">Демо: кадр сгенерирован, здесь будет запись камеры</div></div>' +
     '<div class="ctl"><button class="pb" id="pp">❚❚</button><div class="bar" id="bar"><div class="e" style="left:' + x(ev.time) + ';width:calc(' + x(ev['Конец']) + ' - ' + x(ev.time) + ');background:' + (SC[ev['Состояние']] || '#ccc') + '"></div>' + abs + '<div class="h" id="hd"></div></div></div>' +
     '<div class="lg"><i style="background:' + (SC[ev['Состояние']] || '#ccc') + ';margin-left:0"></i>' + ev['Состояние'] + '<i style="background:#5F5E5A"></i>оператора нет у линии<button class="cl" id="cl">Закрыть запись</button></div>';
-  const ov = root.querySelector('#ov'), tc = root.querySelector('#tc'), stl = root.querySelector('#st'), hd = root.querySelector('#hd'), pp = root.querySelector('#pp');
+  const im = root.querySelector('#im'), ov = root.querySelector('#ov'), tc = root.querySelector('#tc'), stl = root.querySelector('#st'), hd = root.querySelector('#hd'), pp = root.querySelector('#pp');
   let pos = 0, playing = true, last = null, shown = null;
   const PLAY = 15000;                                    // whole clip in 15 s
   function paint() {
     const t = t0 + pos * span, on = present(t);
-    if (on !== shown) { ov.innerHTML = overlay(on); stl.className = 'st ' + (on ? 'ok' : 'no'); stl.textContent = on ? 'Оператор в зоне' : 'Нет оператора в зоне'; shown = on; }
+    if (on !== shown) { im.src = on ? IMG1 : IMG0; ov.innerHTML = overlay(on); stl.className = 'st ' + (on ? 'ok' : 'no'); stl.textContent = on ? 'Сейчас: оператор в зоне' : 'Сейчас: нет оператора в зоне'; shown = on; }
     tc.textContent = clock(t); hd.style.left = (pos * 100).toFixed(2) + '%'; pp.textContent = playing ? '❚❚' : '▶';
   }
   function step(ts) { if (last !== null && playing) { pos += (ts - last) / PLAY; if (pos >= 1) { pos = 1; playing = false; } } last = ts; paint(); window.__nprVidRaf = requestAnimationFrame(step); }
@@ -737,11 +731,13 @@ if (!ev) {
 def camera():
     import base64
     b64 = base64.b64encode(CAM_IMG.read_bytes()).decode()
+    b64op = base64.b64encode(CAM_IMG_OP.read_bytes()).decode()
     return {"type": "gapit-htmlgraphics-panel", "title": "Камера линии",
-            "description": "Запись камеры к выбранной остановке. Камера определяет, есть ли оператор в зоне у пульта. В демо кадр сгенерирован (Figma AI), фигура оператора и зона нарисованы поверх по демо-данным.",
+            "description": "Запись камеры к выбранной остановке. Камера определяет, есть ли оператор в зоне у пульта. В демо два кадра одной сцены (сгенерированы в Figma AI): с оператором у пульта и без него; кадр и зона меняются по демо-данным присутствия.",
             "gridPos": {"x": 15, "y": 33, "w": 9, "h": 13},
             "targets": [q(SEG_CSV, "G"), q(OP_CSV, "O")],
-            "options": {"html": '<div id="v"></div><img id="cam" style="display:none" src="data:image/jpeg;base64,' + b64 + '">',
+            "options": {"html": '<div id="v"></div><img id="cam" style="display:none" src="data:image/jpeg;base64,' + b64 + '">'
+                                '<img id="camop" style="display:none" src="data:image/jpeg;base64,' + b64op + '">',
                         "css": CAM_CSS, "onRender": CAM_JS, "onInit": "", "rootCSS": "",
                         "renderOnMount": True, "panelupdateOnMount": True, "dynamicData": False, "dynamicFieldDisplayValues": False,
                         "dynamicHtmlGraphics": False, "dynamicProps": False, "centerAlignContent": False, "overflow": "hidden",
