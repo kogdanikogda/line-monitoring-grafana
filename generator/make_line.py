@@ -133,6 +133,48 @@ while day < END:
     day += timedelta(days=1)
 SEG.append(dict(t=END, end=END + timedelta(hours=1), state="Выходной", tpl="Выходной", reason="", group="", d=0, cards=0, lost=0))
 
+# camera: when the operator was out of the zone at the line. Unexplained stops mostly happen without the operator,
+# material stops often (he went for material), faults rarely; plus short walk-aways while the line runs.
+random.seed(23)
+ABS = []
+for s in SEG:
+    st, rs = s["state"], s["reason"]
+    if st == "Выходной" or not s["d"]:
+        continue
+    if st == "Работа":
+        if s["d"] > 20 and random.random() < min(0.9, s["d"] / 120):
+            dd = random.uniform(3, 10)
+            a = s["t"] + timedelta(minutes=random.uniform(2, s["d"] - dd - 1))
+            ABS.append([a, a + timedelta(minutes=dd)])
+        continue
+    p, lo, hi = 0.08, 0.2, 0.6
+    if st == "Стоп" and rs == "Причина не указана":
+        p, lo, hi = 0.85, 0.5, 1.0
+    elif rs in ("Логистика", "Замена бунта") or st == "Ожидание материала":
+        p, lo, hi = 0.5, 0.3, 0.8
+    if random.random() < p:
+        frac = random.uniform(lo, hi)
+        dd = s["d"] * frac
+        a = s["t"] + timedelta(minutes=random.uniform(0, s["d"] - dd))
+        ABS.append([a, a + timedelta(minutes=dd)])
+ABS.sort()
+MERGED = []
+for a, b in ABS:
+    if MERGED and a <= MERGED[-1][1]:
+        MERGED[-1][1] = max(MERGED[-1][1], b)
+    else:
+        MERGED.append([a, b])
+ABS = MERGED
+
+
+def absent(t0, t1):
+    return sum(max(0, (min(b, t1) - max(a, t0)).total_seconds() / 60) for a, b in ABS)
+
+
+for s in SEG:
+    s["noop"] = absent(s["t"], s["end"]) if s["d"] else 0
+DOWN = lambda s: s["state"] not in ("Работа", "Выходной", "Нет данных")
+
 
 def csv(header, rows):
     out = [",".join(header)]
@@ -146,9 +188,17 @@ def r1(x):
 
 
 # segments: timeline, reasons, templates, header
-SEG_CSV = csv(["time", "Конец", "Состояние", "Шаблон", "Причина", "Группа", "Мин", "Карт", "Потеря"],
+SEG_CSV = csv(["time", "Конец", "Состояние", "Шаблон", "Причина", "Группа", "Мин", "Карт", "Потеря", "Без оператора"],
               [[iso(s["t"]), ms(s["end"]), s["state"], s["tpl"], "Смена шаблона" if s["state"] == "Переналадка" else s["reason"], s["group"], r1(s["d"]), r1(s["cards"]),
-                r1(s["lost"])] for s in SEG])
+                r1(s["lost"]), r1(s["noop"])] for s in SEG])
+OPN = "Оператор (камера)"
+OP = [(s["t"], "Выходной") for s in SEG if s["state"] == "Выходной"]
+for sh in SHIFTS:
+    OP.append((sh["t"], "У линии"))
+for a, b in ABS:
+    OP += [(a, "Нет у линии"), (b, "У линии")]
+OP.sort(key=lambda r: r[0])
+OP_CSV = csv(["time", OPN], [[iso(t), v] for t, v in OP])
 
 # shifts: KPIs and header
 SHIFT_CSV = csv(["time", "Конец", "Смена", "План", "Сделано", "Работа", "Доступно", "Потеря", "Переналадки", "Сверх",
@@ -214,14 +264,18 @@ for s in SEG:
         loss = f"плановое, +{round(s['over'])} мин сверх нормы" if s["over"] else "плановое, в норме"
     else:
         loss = f"≈ {round(s['lost'])}"
+    noop = "—" if s["state"] == "Нет данных" or s["noop"] < 0.5 else f"{round(s['noop'] / s['d'] * 100)}% ({dur(s['noop'])})"
     JR.append([iso(s["t"]), ms(s["end"]), "shift", f"{s['t']:%d.%m} {s['t']:%H:%M}–{s['end']:%H:%M}", s["state"], s["reason"],
-               dur(s["d"]), loss])
+               dur(s["d"]), loss, noop, ms(s["t"])])
 for sh in SHIFTS:
     p = sh["done"] / PLAN_SHIFT
+    xs = [x for x in SEG if sh["t"] <= x["t"] < sh["end"] and DOWN(x)]
+    dn, no = sum(x["d"] for x in xs), sum(x["noop"] for x in xs)
     JR.append([iso(sh["t"]), ms(sh["end"]), "days|month", sh["label"], f"{p:.0%} плана · {round(sh['done'])} из {PLAN_SHIFT}",
-               max(sh["by"].items(), key=lambda kv: kv[1])[0] if sh["by"] else "—", dur(sh["down"]), f"≈ {round(sh['lost'])}"])
+               max(sh["by"].items(), key=lambda kv: kv[1])[0] if sh["by"] else "—", dur(sh["down"]), f"≈ {round(sh['lost'])}",
+               f"{round(no / dn * 100)}% простоя" if dn else "—", ""])
 JR.sort(key=lambda r: r[0])
-JR_CSV = csv(["time", "Конец", "Масштаб", "Когда", "Что", "Причина", "Длительность", "Не сделано карт"], JR)
+JR_CSV = csv(["time", "Конец", "Масштаб", "Когда", "Что", "Причина", "Длительность", "Не сделано карт", "Без оператора", "Видео"], JR)
 
 # ---------- panels ----------
 DS = {"type": "grafana-testdata-datasource", "uid": "demo"}
@@ -306,7 +360,7 @@ const DATA_END = new Date(2026, 10, 1, 8).getTime();              // demo data e
 const from = H.props.timeRange.from.valueOf(), to = H.props.timeRange.to.valueOf(), span = to - from;
 const scale = span <= DAY + HR ? 'shift' : span <= 10 * DAY ? 'days' : 'month', tu = scale === 'shift' ? 'мин' : 'ч';
 if (TS.replace('${scale}') !== scale || TS.replace('${tu}') !== tu) { LS.partial({ 'var-scale': scale, 'var-tu': tu }, true); }
-const go = (f, t) => LS.partial({ from: f, to: t, 'var-scale': null, 'var-tu': null });
+const go = (f, t) => LS.partial({ from: f, to: t, 'var-scale': null, 'var-tu': null, 'var-clip': null });
 const dayStart = ms => { const d = new Date(ms - OFF); return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 8).getTime(); };
 const fmtD = ms => { const d = new Date(ms); return d.getDate() + ' ' + MON[d.getMonth()]; };
 const num = n => Math.round(n).toLocaleString('ru-RU');
@@ -350,12 +404,15 @@ if (!sh.length) {
     const k = r['Состояние'] === 'Переналадка' ? 'переналадки сверх нормы' : r['Причина'];
     by[k] = by[k] || { m: 0, c: 0 }; by[k].m += r['Состояние'] === 'Переналадка' ? Math.max(0, r['Мин'] - 20) : +r['Мин']; by[k].c += +r['Потеря']; });
   const top = Object.entries(by).sort((a, b) => b[1].c - a[1].c)[0];
+  let dn = 0, no = 0;
+  sg.forEach(r => { if (['Работа', 'Выходной', 'Нет данных'].includes(r['Состояние'])) return; dn += +r['Мин']; no += +r['Без оператора']; });
   const who = span === 12 * HR ? 'За смену' : span === DAY ? 'За сутки' : 'За период';
   html = '<div class="v"><div class="h1">' + who + ' сделано ' + num(done) + ' ' + pl(done, 'карта', 'карты', 'карт') + ' при плане ' + num(plan) +
     ' — <span class="' + (pct < 90 ? 'bad' : '') + '">' + pct + '%</span>' + (gap < 0 ? ' (−' + num(-gap) + ')' : '') + '</div>' +
     '<div class="t">Из‑за простоев не сделано <b>≈ ' + num(lost) + ' ' + pl(lost, 'карта', 'карты', 'карт') + '</b>.' +
     (top ? ' Больше всего потеряли на «' + top[0] + '»: ' + dur(top[1].m) + ', ≈ ' + num(top[1].c) + ' ' + pl(top[1].c, 'карта', 'карты', 'карт') + '.' : '') + '</div>' +
-    '<div class="t m">Линия в работе ' + Math.round(work / avail * 100) + '% времени. Переналадок ' + nset + (over > 0 ? ', сверх нормы ' + dur(over) : ', все в норме') + '.</div></div>';
+    '<div class="t m">Линия в работе ' + Math.round(work / avail * 100) + '% времени. Переналадок ' + nset + (over > 0 ? ', сверх нормы ' + dur(over) : ', все в норме') + '.' +
+    (dn > 0 ? ' Камера: во время остановок оператора не было у линии ' + Math.round(no / dn * 100) + '% времени.' : '') + '</div></div>';
 }
 
 const cal = '<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 7h12M5 1.5v3M11 1.5v3"/></svg>';
@@ -443,12 +500,12 @@ def header():
 
 
 def timeline():
-    return {"type": "state-timeline", "title": "Состояние линии и шаблон",
+    return {"type": "state-timeline", "title": "Состояние линии, шаблон и оператор",
             "description": "Каждый цвет — состояние линии. Наведите на участок — покажу время и длительность. Работа — спокойный светлый, цвет только у отклонений.",
-            "gridPos": {"x": 0, "y": 5, "w": 24, "h": 6}, "targets": [q(SEG_CSV)],
-            "transformations": [hide("Конец", "Причина", "Группа", "Мин", "Карт", "Потеря")],
+            "gridPos": {"x": 0, "y": 5, "w": 24, "h": 7}, "targets": [q(SEG_CSV), q(OP_CSV, "B")],
+            "transformations": [hide("Конец", "Причина", "Группа", "Мин", "Карт", "Потеря", "Без оператора")],
             "fieldConfig": {"defaults": {"custom": {"fillOpacity": 100, "lineWidth": 0}, "color": {"mode": "fixed", "fixedColor": "#C9DCD0"},
-                                         "mappings": mapping({**STATE_C, **TPL_C})}, "overrides": []},
+                                         "mappings": mapping({**STATE_C, **TPL_C, "У линии": "#E3ECE6", "Нет у линии": "#5F5E5A"})}, "overrides": []},
             "options": {"mergeValues": True, "showValue": "never", "alignValue": "left", "rowHeight": 0.8,
                         "legend": {"showLegend": True, "displayMode": "list", "placement": "bottom"},
                         "tooltip": {"mode": "single", "sort": "none"}}}
@@ -515,7 +572,7 @@ def changeovers():
 
 def reasons():
     return {"type": "table", "title": "Куда ушло время",
-            "description": "Остановки за период: сколько времени и сколько карт не сделали. Переналадка — плановая, в карты идёт только время сверх нормы. Обрыв связи с ПЛК — не простой, здесь его нет.",
+            "description": "Остановки за период: сколько времени, сколько карт не сделали и какую долю этого времени оператора не было у линии (по камере). Переналадка — плановая, в карты идёт только время сверх нормы. Обрыв связи с ПЛК — не простой, здесь его нет.",
             "gridPos": {"x": 0, "y": 23, "w": 12, "h": 10}, "targets": [q(SEG_CSV)],
             "transformations": [RANGE,
                                 {"id": "filterByValue", "options": {"type": "exclude", "match": "any", "filters": [
@@ -524,17 +581,21 @@ def reasons():
                                 {"id": "groupBy", "options": {"fields": {"Причина": {"operation": "groupby", "aggregations": []},
                                                                           "Состояние": {"operation": "groupby", "aggregations": []},
                                                                           "Мин": {"operation": "aggregate", "aggregations": ["sum"]},
-                                                                          "Потеря": {"operation": "aggregate", "aggregations": ["sum"]}}}},
+                                                                          "Потеря": {"operation": "aggregate", "aggregations": ["sum"]},
+                                                                          "Без оператора": {"operation": "aggregate", "aggregations": ["sum"]}}}},
                                 {"id": "sortBy", "options": {"sort": [{"field": "Потеря (sum)", "desc": True}]}},
+                                calc("Без оператора (sum)", "/", "Мин (sum)", "Без оператора"),
                                 calc("Мин (sum)", "/", 60, "Время, ч"), calc("Мин (sum)", "*", 1, "Время, мин"),
                                 {"id": "organize", "options": {"excludeByName": {"Мин (sum)": True}, "indexByName": {},
                                                                "renameByName": {"Потеря (sum)": "Не сделано карт"}}},
-                                only("^(Состояние|Причина|Время, ${tu}|Не сделано карт)$")],
+                                only("^(Состояние|Причина|Время, ${tu}|Не сделано карт|Без оператора)$")],
             "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
                             "overrides": TU + [
-                                by_regex("^Время", {"id": "custom.width", "value": 120}),
+                                by_regex("^Время", {"id": "custom.width", "value": 110}),
+                                by_name("Без оператора", {"id": "unit", "value": "percentunit"}, {"id": "decimals", "value": 0},
+                                        {"id": "custom.width", "value": 116}),
                                 by_name("Состояние", {"id": "custom.cellOptions", "value": {"type": "color-background", "mode": "basic"}},
-                                        {"id": "mappings", "value": mapping(STATE_C)}, {"id": "custom.width", "value": 170}),
+                                        {"id": "mappings", "value": mapping(STATE_C)}, {"id": "custom.width", "value": 140}),
                                 by_name("Не сделано карт", {"id": "decimals", "value": 0}, {"id": "unit", "value": "locale"}, {"id": "color", "value": fixed(LOSS)},
                                         {"id": "custom.cellOptions", "value": {"type": "gauge", "mode": "basic", "valueDisplayMode": "text"}})]},
             "options": {"showHeader": True, "cellHeight": "md", "footer": {"show": False}}}
@@ -559,22 +620,137 @@ def output():
 
 def journal():
     return {"type": "table", "title": "${scale:text}",
-            "description": "За смену и сутки — каждая остановка и событие. За период — смены, главная причина каждой.",
-            "gridPos": {"x": 0, "y": 33, "w": 24, "h": 11}, "targets": [q(JR_CSV)],
-            "transformations": [RANGE, SCALE, hide("time", "Конец", "Масштаб")],
+            "description": "За смену и сутки — каждая остановка и событие; «▶ Смотреть» открывает запись камеры справа. За период — смены, главная причина каждой.",
+            "gridPos": {"x": 0, "y": 33, "w": 15, "h": 13}, "targets": [q(JR_CSV)],
+            "transformations": [RANGE, SCALE, {"id": "organize", "options": {"excludeByName": {"time": True, "Конец": True, "Масштаб": True},
+                                                                         "renameByName": {}, "indexByName": {"Когда": 0, "Видео": 1, "Что": 2, "Причина": 3,
+                                                                         "Длительность": 4, "Не сделано карт": 5, "Без оператора": 6}}}],
             "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
                             "overrides": [by_name("Когда", {"id": "custom.width", "value": 170}),
                                           by_name("Что", {"id": "custom.width", "value": 230}, {"id": "color", "value": fixed("#FFFFFF")},
                                                   {"id": "custom.cellOptions", "value": {"type": "color-background", "mode": "basic"}},
                                                   {"id": "mappings", "value": mapping(STATE_C) + [
                                                       {"type": "regex", "options": {"pattern": "^([0-8]?\\d)% .*", "result": {"color": "#F6D5D1", "index": 20}}}]}),
-                                          by_name("Длительность", {"id": "custom.width", "value": 130}),
-                                          by_name("Не сделано карт", {"id": "custom.width", "value": 220})]},
+                                          by_name("Когда", {"id": "custom.width", "value": 116}),
+                                          by_name("Что", {"id": "custom.width", "value": 150}),
+                                          by_name("Длительность", {"id": "custom.width", "value": 96}, {"id": "displayName", "value": "Длит."}),
+                                          by_name("Не сделано карт", {"id": "custom.width", "value": 104}, {"id": "displayName", "value": "Не сделано"}),
+                                          by_name("Без оператора", {"id": "custom.width", "value": 120}),
+                                          by_name("Видео", {"id": "custom.width", "value": 104},
+                                                  {"id": "mappings", "value": [{"type": "range", "options": {"from": 1, "to": 1e14, "result": {"text": "▶ Смотреть", "color": "#1B4F9C", "index": 0}}}]},
+                                                  {"id": "custom.cellOptions", "value": {"type": "color-text"}},
+                                                  {"id": "links", "value": [{"title": "Запись камеры", "url": "/d/neuroprom-line/linija-cesis-2?${__url_time_range}&var-line=${line}&var-scale=${scale}&var-tu=${tu}&var-clip=${__value.raw}"}]})]},
             "options": {"showHeader": True, "cellHeight": "sm", "footer": {"show": False}}}
 
 
+# --- camera: still frame generated in Figma + overlay driven by the operator data (HTML graphics) ---
+CAM_IMG = Path(__file__).resolve().parent.parent / "assets" / "camera.jpg"
+CAM_CSS = r"""
+:host{all:initial}
+#v{font-family:Inter,"Helvetica Neue",Arial,sans-serif;color:#121519;display:flex;flex-direction:column;gap:8px;height:100%}
+.inf{font-size:14px;line-height:20px;min-height:40px}.inf b{font-weight:600}.inf .m{color:#5F5E5A}
+.scr{position:relative;width:100%;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:#222}
+.scr img,.scr svg{position:absolute;inset:0;width:100%;height:100%}
+.scr img{object-fit:cover;filter:saturate(.85) contrast(.95)}
+.ts{position:absolute;left:8px;top:8px;font:600 12px/16px ui-monospace,Menlo,monospace;color:#fff;background:rgba(0,0,0,.55);padding:4px 8px;border-radius:4px}
+.ts i{display:inline-block;width:8px;height:8px;border-radius:50%;background:#E5484D;margin-right:6px;vertical-align:0}
+.st{position:absolute;right:8px;top:8px;font:600 12px/16px inherit;font-family:inherit;padding:4px 8px;border-radius:4px;color:#fff}
+.st.ok{background:rgba(36,81,58,.9)}.st.no{background:rgba(200,55,45,.92)}
+.dm{position:absolute;right:8px;bottom:8px;font-size:11px;line-height:14px;color:#fff;background:rgba(0,0,0,.5);padding:4px 8px;border-radius:4px}
+.ctl{display:flex;align-items:center;gap:8px}
+.pb{width:40px;height:40px;flex:none;border:1px solid #CCD3D6;border-radius:8px;background:#fff;font-size:14px;cursor:pointer}
+.bar{position:relative;flex:1;height:24px;border-radius:4px;background:#C9DCD0;cursor:pointer;overflow:hidden}
+.bar .e{position:absolute;top:0;bottom:0}.bar .a{position:absolute;top:16px;bottom:0;background:#5F5E5A}
+.bar .h{position:absolute;top:-2px;bottom:-2px;width:2px;background:#121519}
+.lg{font-size:12px;line-height:16px;color:#5F5E5A}.lg i{display:inline-block;width:12px;height:8px;border-radius:2px;margin:0 4px 0 12px;vertical-align:0}
+.cl{margin-left:auto;border:0;background:none;color:#5F5E5A;font-size:12px;cursor:pointer;text-decoration:underline}
+"""
+CAM_JS = r"""
+const H = htmlGraphics, root = htmlNode.getElementById('v'), img = htmlNode.getElementById('cam').src;
+const TS = getTemplateSrv(), LS = H.locationService;
+const clip = +TS.replace('${clip}') || 0, scale = TS.replace('${scale}');
+const OPN = 'Оператор (камера)';
+const SC = {'Работа':'#C9DCD0','Стоп':'#C8372D','Пауза':'#F2C14E','Ожидание материала':'#E3C79A','Переналадка':'#CFC9EE','Тепловая защита':'#EE9A5B','Авария привода':'#7E1F1A','Нет данных':'#E4E4E1'};
+function frame(n) { return (data.series || []).find(s => s.refId === n); }
+function rows(f) { if (!f) return []; const n = f.fields[0].values.length, o = [];
+  for (let i = 0; i < n; i++) { const r = {}; f.fields.forEach(x => r[x.name] = x.values.get ? x.values.get(i) : x.values[i]); o.push(r); } return o; }
+const seg = rows(frame('G')), op = rows(frame('O'));
+const pad2 = n => String(n).padStart(2, '0');
+const clock = t => { const d = new Date(t); return pad2(d.getDate()) + '.' + pad2(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()); };
+const hm = t => { const d = new Date(t); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); };
+const dur = m => { m = Math.round(m); return m < 60 ? m + ' мин' : Math.floor(m / 60) + ' ч ' + pad2(m % 60) + ' мин'; };
+function present(t) { let v = 'У линии'; for (const r of op) { if (r.time <= t) v = r[OPN]; else break; } return v === 'У линии'; }
+// operator figure next to the control cabinet + detection box; the zone turns red when he is out
+const ZONE = '300,330 470,300 610,340 440,420';
+function overlay(on) {
+  return '<svg viewBox="0 0 1024 576" preserveAspectRatio="xMidYMid slice">' +
+    '<polygon points="' + ZONE + '" fill="' + (on ? 'rgba(242,193,78,.12)' : 'rgba(200,55,45,.22)') + '" stroke="' + (on ? '#F2C14E' : '#E5484D') + '" stroke-width="3" stroke-dasharray="10 6"/>' +
+    '<text x="312" y="438" font-family="Inter,Arial" font-size="15" font-weight="600" fill="' + (on ? '#F2C14E' : '#FF6B66') + '">Зона оператора</text>' +
+    (on ? '<g transform="translate(372,262)">' +
+      '<ellipse cx="0" cy="92" rx="16" ry="5" fill="rgba(0,0,0,.35)"/>' +
+      '<rect x="-9" y="52" width="7" height="40" rx="3" fill="#2B2F36"/><rect x="2" y="52" width="7" height="40" rx="3" fill="#2B2F36"/>' +
+      '<path d="M-13 18 Q-13 12 -7 12 L7 12 Q13 12 13 18 L13 56 L-13 56 Z" fill="#F08A24"/>' +
+      '<rect x="-13" y="34" width="26" height="3" fill="#E9EEF2"/><rect x="-13" y="44" width="26" height="3" fill="#E9EEF2"/>' +
+      '<rect x="-19" y="16" width="6" height="30" rx="3" fill="#3A3F47"/><rect x="13" y="16" width="6" height="30" rx="3" fill="#3A3F47"/>' +
+      '<circle cx="0" cy="3" r="9" fill="#C99A7A"/><path d="M-10 1 Q0 -12 10 1 Z" fill="#F2F2F0"/></g>' +
+      '<rect x="345" y="248" width="56" height="112" fill="none" stroke="#3DDC84" stroke-width="2"/>' +
+      '<rect x="345" y="230" width="104" height="18" fill="#3DDC84"/><text x="350" y="244" font-family="Inter,Arial" font-size="12" font-weight="600" fill="#0B2A17">оператор 0.94</text>' : '') +
+    '</svg>';
+}
+cancelAnimationFrame(window.__nprVidRaf || 0);
+let ev = null;
+if (clip) ev = seg.find(r => Math.abs(r.time - clip) < 2000);
+if (!ev) {
+  const hint = scale === 'shift' ? 'Нажмите «▶ Смотреть» у остановки в журнале — покажу запись камеры за эти минуты.'
+                                 : 'Записи камеры открываются для остановок за смену или сутки: выберите «Смена» или «Сутки».';
+  root.innerHTML = '<div class="inf"><span class="m">' + hint + '</span></div>' +
+    '<div class="scr"><img src="' + img + '">' + overlay(true) + '<div class="ts"><i></i>КАМ‑1 · Линия Цесис 2</div><div class="dm">Демо: кадр сгенерирован, здесь будет запись камеры</div></div>';
+} else {
+  const t0 = ev.time - 60e3, t1 = ev['Конец'] + 60e3, span = t1 - t0, mins = ev['Мин'], noop = +ev['Без оператора'] || 0;
+  const pct = mins ? Math.round(noop / mins * 100) : 0;
+  const x = t => ((t - t0) / span * 100).toFixed(2) + '%';
+  let abs = '', prev = null;
+  for (let t = t0; t <= t1; t += 15e3) { const on = present(t); if (!on && prev === null) prev = t; if ((on || t + 15e3 > t1) && prev !== null) { abs += '<div class="a" style="left:' + x(prev) + ';width:calc(' + x(t) + ' - ' + x(prev) + ')"></div>'; prev = null; } }
+  root.innerHTML = '<div class="inf"><b>' + hm(ev.time) + '–' + hm(ev['Конец']) + ' · ' + ev['Состояние'] + '</b> · ' + (ev['Причина'] || '') +
+    '<br><span class="m">Оператора не было у линии ' + (pct ? pct + '% времени (' + dur(noop) + ')' : '— был всё время') + '. Запись ускорена.</span></div>' +
+    '<div class="scr"><img src="' + img + '"><div id="ov"></div><div class="ts"><i></i>КАМ‑1 · <span id="tc"></span></div><div class="st" id="st"></div>' +
+    '<div class="dm">Демо: кадр сгенерирован, здесь будет запись камеры</div></div>' +
+    '<div class="ctl"><button class="pb" id="pp">❚❚</button><div class="bar" id="bar"><div class="e" style="left:' + x(ev.time) + ';width:calc(' + x(ev['Конец']) + ' - ' + x(ev.time) + ');background:' + (SC[ev['Состояние']] || '#ccc') + '"></div>' + abs + '<div class="h" id="hd"></div></div></div>' +
+    '<div class="lg"><i style="background:' + (SC[ev['Состояние']] || '#ccc') + ';margin-left:0"></i>' + ev['Состояние'] + '<i style="background:#5F5E5A"></i>оператора нет у линии<button class="cl" id="cl">Закрыть запись</button></div>';
+  const ov = root.querySelector('#ov'), tc = root.querySelector('#tc'), stl = root.querySelector('#st'), hd = root.querySelector('#hd'), pp = root.querySelector('#pp');
+  let pos = 0, playing = true, last = null, shown = null;
+  const PLAY = 15000;                                    // whole clip in 15 s
+  function paint() {
+    const t = t0 + pos * span, on = present(t);
+    if (on !== shown) { ov.innerHTML = overlay(on); stl.className = 'st ' + (on ? 'ok' : 'no'); stl.textContent = on ? 'Оператор в зоне' : 'Нет оператора в зоне'; shown = on; }
+    tc.textContent = clock(t); hd.style.left = (pos * 100).toFixed(2) + '%'; pp.textContent = playing ? '❚❚' : '▶';
+  }
+  function step(ts) { if (last !== null && playing) { pos += (ts - last) / PLAY; if (pos >= 1) { pos = 1; playing = false; } } last = ts; paint(); window.__nprVidRaf = requestAnimationFrame(step); }
+  pp.onclick = () => { if (pos >= 1) pos = 0; playing = !playing; paint(); };
+  root.querySelector('#bar').onclick = e => { const r = e.currentTarget.getBoundingClientRect(); pos = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); paint(); };
+  root.querySelector('#cl').onclick = () => LS.partial({ 'var-clip': null });
+  window.__nprVidRaf = requestAnimationFrame(step);
+}
+"""
+
+
+def camera():
+    import base64
+    b64 = base64.b64encode(CAM_IMG.read_bytes()).decode()
+    return {"type": "gapit-htmlgraphics-panel", "title": "Камера линии",
+            "description": "Запись камеры к выбранной остановке. Камера определяет, есть ли оператор в зоне у пульта. В демо кадр сгенерирован (Figma AI), фигура оператора и зона нарисованы поверх по демо-данным.",
+            "gridPos": {"x": 15, "y": 33, "w": 9, "h": 13},
+            "targets": [q(SEG_CSV, "G"), q(OP_CSV, "O")],
+            "options": {"html": '<div id="v"></div><img id="cam" style="display:none" src="data:image/jpeg;base64,' + b64 + '">',
+                        "css": CAM_CSS, "onRender": CAM_JS, "onInit": "", "rootCSS": "",
+                        "renderOnMount": True, "panelupdateOnMount": True, "dynamicData": False, "dynamicFieldDisplayValues": False,
+                        "dynamicHtmlGraphics": False, "dynamicProps": False, "centerAlignContent": False, "overflow": "hidden",
+                        "useGrafanaScrollbar": False, "SVGBaseFix": True, "codeData": "{}", "calcsMutation": "standard",
+                        "onInitOnResize": False, "add100Percentage": True}}
+
+
 def build():
-    p = [header(), timeline()] + kpis() + [templates(), changeovers(), reasons(), output(), journal()]
+    p = [header(), timeline()] + kpis() + [templates(), changeovers(), reasons(), output(), journal(), camera()]
     for i, x in enumerate(p, 1):
         x["id"] = i
         if i > 1:
@@ -593,7 +769,8 @@ def build():
                  "current": {"text": "Линия Цесис 2", "value": "Линия Цесис 2"},
                  "options": [{"text": "Линия Цесис 2", "value": "Линия Цесис 2", "selected": True}]},
                 hidden("scale", [("Остановки и события", "shift"), ("Смены за период", "days"), ("Смены за месяц", "month")], "shift"),
-                hidden("tu", [("минуты", "мин"), ("часы", "ч")], "мин")]},
+                hidden("tu", [("минуты", "мин"), ("часы", "ч")], "мин"),
+                {"type": "textbox", "name": "clip", "label": "Запись", "hide": 2, "query": "", "current": {"text": "", "value": ""}, "options": []}]},
             "panels": p}
 
 
