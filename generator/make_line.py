@@ -200,6 +200,25 @@ for a, b in ABS:
 OP.sort(key=lambda r: r[0])
 OP_CSV = csv(["time", OPN], [[iso(t), v] for t, v in OP])
 
+# template row of the timeline: one label per run of a template inside a shift, with the cards made in that run,
+# so the labels add up to "Сделано" for the shift and match the KPI
+SHIFT_STARTS = {sh["t"] for sh in SHIFTS}
+_runs, _cur = [], None
+for s_ in SEG:
+    if s_["tpl"] in TPL:
+        if _cur is None or _cur["tpl"] != s_["tpl"] or s_["t"] in SHIFT_STARTS:
+            _cur = {"tpl": s_["tpl"], "cards": 0, "segs": []}
+            _runs.append(_cur)
+        _cur["cards"] += s_["cards"]; _cur["segs"].append(s_)
+    else:
+        _cur = None
+        _runs.append({"tpl": s_["tpl"], "cards": 0, "segs": [s_]})
+TPL_ROWS = []
+for r_ in _runs:
+    lab = f"Шаблон {r_['tpl']} · {round(r_['cards'])} карт" if r_["tpl"] in TPL else r_["tpl"]
+    TPL_ROWS.append([iso(r_["segs"][0]["t"]), lab])
+TPL_CSV = csv(["time", "Шаблон"], TPL_ROWS)
+
 # shifts: KPIs and header
 SHIFT_CSV = csv(["time", "Конец", "Смена", "План", "Сделано", "Работа", "Доступно", "Потеря", "Переналадки", "Сверх",
                  "Простой", "Главная"],
@@ -411,8 +430,7 @@ if (!sh.length) {
     ' — <span class="' + (pct < 90 ? 'bad' : '') + '">' + pct + '%</span>' + (gap < 0 ? ' (−' + num(-gap) + ')' : '') + '</div>' +
     '<div class="t">Из‑за простоев не сделано <b>≈ ' + num(lost) + ' ' + pl(lost, 'карта', 'карты', 'карт') + '</b>.' +
     (top ? ' Больше всего потеряли на «' + top[0] + '»: ' + dur(top[1].m) + ', ≈ ' + num(top[1].c) + ' ' + pl(top[1].c, 'карта', 'карты', 'карт') + '.' : '') + '</div>' +
-    '<div class="t m">Линия в работе ' + Math.round(work / avail * 100) + '% времени. Переналадок ' + nset + (over > 0 ? ', сверх нормы ' + dur(over) : ', все в норме') + '.' +
-    (dn > 0 ? ' Камера: во время остановок оператора не было у линии ' + Math.round(no / dn * 100) + '% времени.' : '') + '</div></div>';
+    '</div>';
 }
 
 const cal = '<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 7h12M5 1.5v3M11 1.5v3"/></svg>';
@@ -603,8 +621,7 @@ def reasons():
 
 def output():
     return {"type": "timeseries", "title": "Выпуск карт",
-            "description": "Тёмное — сделано, светлое — не сделано из‑за простоев, пунктир — план. За смену и сутки — по часам, за период — по дням.",
-            "gridPos": {"x": 12, "y": 23, "w": 12, "h": 10}, "targets": [q(OUT_CSV)],
+                        "gridPos": {"x": 12, "y": 23, "w": 12, "h": 10}, "targets": [q(OUT_CSV)],
             "transformations": [RANGE, SCALE, hide("Конец", "Масштаб")],
             "fieldConfig": {"defaults": {"custom": {"drawStyle": "bars", "fillOpacity": 100, "lineWidth": 0, "barAlignment": 0,
                                                     "stacking": {"mode": "normal", "group": "A"}, "axisSoftMin": 0, "barWidthFactor": 0.8,
@@ -653,18 +670,19 @@ CAM_CSS = r"""
 .scr{position:relative;width:100%;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:#222}
 .scr img,.scr svg{position:absolute;inset:0;width:100%;height:100%}
 .scr img{object-fit:cover;filter:saturate(.85) contrast(.95)}
-.ts{position:absolute;left:8px;top:8px;font:600 12px/16px ui-monospace,Menlo,monospace;color:#fff;background:rgba(0,0,0,.55);padding:4px 8px;border-radius:4px}
+.ts{position:absolute;left:8px;top:8px;right:8px;width:max-content;max-width:calc(100% - 16px);font:600 12px/16px ui-monospace,Menlo,monospace;color:#fff;background:rgba(0,0,0,.55);padding:4px 8px;border-radius:4px}
 .ts i{display:inline-block;width:8px;height:8px;border-radius:50%;background:#E5484D;margin-right:6px;vertical-align:0}
-.st{position:absolute;right:8px;top:8px;font:600 12px/16px inherit;font-family:inherit;padding:4px 8px;border-radius:4px;color:#fff}
+.st{position:absolute;left:8px;bottom:8px;font:600 12px/16px inherit;font-family:inherit;padding:4px 8px;border-radius:4px;color:#fff}
 .st.ok{background:rgba(36,81,58,.9)}.st.no{background:rgba(200,55,45,.92)}
-.dm{position:absolute;right:8px;bottom:8px;font-size:11px;line-height:14px;color:#fff;background:rgba(0,0,0,.5);padding:4px 8px;border-radius:4px}
+.dm{position:absolute;right:8px;top:36px;max-width:45%;text-align:right;font-size:11px;line-height:14px;color:#fff;background:rgba(0,0,0,.5);padding:4px 8px;border-radius:4px}
 .ctl{display:flex;align-items:center;gap:8px}
 .pb{width:40px;height:40px;flex:none;border:1px solid #CCD3D6;border-radius:8px;background:#fff;font-size:14px;cursor:pointer}
 .bar{position:relative;flex:1;height:24px;border-radius:4px;background:#C9DCD0;cursor:pointer;overflow:hidden}
-.bar .e{position:absolute;top:0;bottom:0}.bar .a{position:absolute;top:16px;bottom:0;background:#5F5E5A}
+.bar .e{position:absolute;top:0;bottom:0}.bar .a{position:absolute;top:12px;bottom:0;background:#3B3F45}
 .bar .h{position:absolute;top:-2px;bottom:-2px;width:2px;background:#121519}
 .lg{font-size:12px;line-height:16px;color:#5F5E5A}.lg i{display:inline-block;width:12px;height:8px;border-radius:2px;margin:0 4px 0 12px;vertical-align:0}
 .cl{margin-left:auto;border:0;background:none;color:#5F5E5A;font-size:12px;cursor:pointer;text-decoration:underline}
+.inf .bad{color:#C8372D}.go{border:0;background:none;color:#1B4F9C;font:600 13px/20px inherit;font-family:inherit;cursor:pointer;padding:0 0 0 4px}.lg{display:flex;align-items:center;gap:8px}
 """
 CAM_JS = r"""
 const H = htmlGraphics, root = htmlNode.getElementById('v'), IMG0 = htmlNode.getElementById('cam').src, IMG1 = htmlNode.getElementById('camop').src;
@@ -695,22 +713,29 @@ cancelAnimationFrame(window.__nprVidRaf || 0);
 let ev = null;
 if (clip) ev = seg.find(r => Math.abs(r.time - clip) < 2000);
 if (!ev) {
-  const hint = scale === 'shift' ? 'Нажмите «▶ Смотреть» у остановки в журнале — покажу запись камеры за эти минуты.'
+  const hint = scale === 'shift' ? 'Раскройте причину в «Остановках» и нажмите ▶ у остановки — покажу запись камеры за эти минуты.'
                                  : 'Записи камеры открываются для остановок за смену или сутки: выберите «Смена» или «Сутки».';
   root.innerHTML = '<div class="inf"><span class="m">' + hint + '</span></div>' +
     '<div class="scr"><img src="' + IMG1 + '">' + overlay(true) + '<div class="ts"><i></i>КАМ‑1 · Линия Цесис 2</div><div class="dm">Демо: кадр сгенерирован, здесь будет запись камеры</div></div>';
 } else {
-  const t0 = ev.time - 60e3, t1 = ev['Конец'] + 60e3, span = t1 - t0, mins = ev['Мин'], noop = +ev['Без оператора'] || 0;
+  const t0 = ev.time - 10e3, t1 = ev['Конец'] + 10e3, span = t1 - t0, mins = ev['Мин'], noop = +ev['Без оператора'] || 0;
   const pct = mins ? Math.round(noop / mins * 100) : 0;
   const x = t => ((t - t0) / span * 100).toFixed(2) + '%';
-  let abs = '', prev = null;
-  for (let t = t0; t <= t1; t += 15e3) { const on = present(t); if (!on && prev === null) prev = t; if ((on || t + 15e3 > t1) && prev !== null) { abs += '<div class="a" style="left:' + x(prev) + ';width:calc(' + x(t) + ' - ' + x(prev) + ')"></div>'; prev = null; } }
+  // intervals without the operator inside this clip, from the presence transitions
+  const gone = []; let g0 = present(t0) ? null : t0;
+  op.forEach(r => { if (r.time <= t0 || r.time >= t1) return; const on = r[OPN] === 'У линии';
+    if (!on && g0 === null) g0 = r.time; if (on && g0 !== null) { gone.push([g0, r.time]); g0 = null; } });
+  if (g0 !== null) gone.push([g0, t1]);
+  const abs = gone.map(g => '<div class="a" style="left:' + x(g[0]) + ';width:calc(' + x(g[1]) + ' - ' + x(g[0]) + ')"></div>').join('');
+  const story = gone.length ? gone.map((g, i) => (g[0] <= t0 ? 'с начала остановки оператора не было' : 'в ' + hm(g[0]) + ' оператор ушёл') +
+      (g[1] >= t1 ? ' и до конца не вернулся' : ', вернулся в ' + hm(g[1])) + ' <button class="go" data-t="' + g[0] + '">▶ смотреть с ' + hm(Math.max(g[0], t0)) + '</button>').join('<br>')
+    : 'Оператор был у пульта всю остановку.';
   root.innerHTML = '<div class="inf"><b>' + hm(ev.time) + '–' + hm(ev['Конец']) + ' · ' + ev['Состояние'] + '</b> · ' + (ev['Причина'] || '') +
-    '<br><span class="m">За всю остановку оператора не было ' + (pct ? pct + '% времени (' + dur(noop) + ')' : 'ни минуты') + '. Запись ускорена.</span></div>' +
+    (pct ? ' · <b class="bad">без оператора ' + pct + '%</b>' : '') + '<br><span class="m">' + story.charAt(0).toUpperCase() + story.slice(1) + '</span></div>' +
     '<div class="scr"><img id="im" src="' + IMG1 + '"><div id="ov"></div><div class="ts"><i></i>КАМ‑1 · <span id="tc"></span></div><div class="st" id="st"></div>' +
     '<div class="dm">Демо: кадр сгенерирован, здесь будет запись камеры</div></div>' +
     '<div class="ctl"><button class="pb" id="pp">❚❚</button><div class="bar" id="bar"><div class="e" style="left:' + x(ev.time) + ';width:calc(' + x(ev['Конец']) + ' - ' + x(ev.time) + ');background:' + (SC[ev['Состояние']] || '#ccc') + '"></div>' + abs + '<div class="h" id="hd"></div></div></div>' +
-    '<div class="lg"><i style="background:' + (SC[ev['Состояние']] || '#ccc') + ';margin-left:0"></i>' + ev['Состояние'] + '<i style="background:#5F5E5A"></i>оператора нет у линии<button class="cl" id="cl">Закрыть запись</button></div>';
+    '<div class="lg">Полоса — вся остановка; тёмные отрезки на ней — оператора не было у линии. Запись ускорена.<button class="cl" id="cl">Закрыть запись</button></div>';
   const im = root.querySelector('#im'), ov = root.querySelector('#ov'), tc = root.querySelector('#tc'), stl = root.querySelector('#st'), hd = root.querySelector('#hd'), pp = root.querySelector('#pp');
   let pos = 0, playing = true, last = null, shown = null;
   const PLAY = 15000;                                    // whole clip in 15 s
@@ -723,6 +748,7 @@ if (!ev) {
   pp.onclick = () => { if (pos >= 1) pos = 0; playing = !playing; paint(); };
   root.querySelector('#bar').onclick = e => { const r = e.currentTarget.getBoundingClientRect(); pos = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); paint(); };
   root.querySelector('#cl').onclick = () => LS.partial({ 'var-clip': null });
+  root.querySelectorAll('.go').forEach(b => b.onclick = () => { pos = Math.max(0, (+b.dataset.t - t0) / span); playing = true; paint(); });
   window.__nprVidRaf = requestAnimationFrame(step);
 }
 """
@@ -733,7 +759,6 @@ def camera():
     b64 = base64.b64encode(CAM_IMG.read_bytes()).decode()
     b64op = base64.b64encode(CAM_IMG_OP.read_bytes()).decode()
     return {"type": "gapit-htmlgraphics-panel", "title": "Камера линии",
-            "description": "Запись камеры к выбранной остановке. Камера определяет, есть ли оператор в зоне у пульта. В демо два кадра одной сцены (сгенерированы в Figma AI): с оператором у пульта и без него; кадр и зона меняются по демо-данным присутствия.",
             "gridPos": {"x": 15, "y": 33, "w": 9, "h": 13},
             "targets": [q(SEG_CSV, "G"), q(OP_CSV, "O")],
             "options": {"html": '<div id="v"></div><img id="cam" style="display:none" src="data:image/jpeg;base64,' + b64 + '">'
@@ -745,12 +770,147 @@ def camera():
                         "onInitOnResize": False, "add100Percentage": True}}
 
 
+# ---- merged "Остановки" block: reason rows with flat bars, expand to the stops, round play -> camera (HTML graphics) ----
+_ev = []
+for s in SEG:
+    if s["state"] in ("Работа", "Выходной", "Нет данных"):
+        continue
+    setup = s["state"] == "Переналадка"
+    pct = round(s["noop"] / s["d"] * 100) if s["d"] and s["noop"] >= 0.5 else 0
+    _ev.append([iso(s["t"]), ms(s["end"]), f"Переналадки (норма {SETUP_NORM} мин)" if setup else s["reason"], s["state"],
+                f"{s['t']:%d.%m %H:%M}–{s['end']:%H:%M}", r1(s["d"]),
+                (s["reason"].replace("Смена шаблона ", "") + " · " if setup else "") + dur(s["d"]) +
+                ((f" · +{round(s['over'])} мин сверх нормы" if s["over"] else " · в норме") if setup else ""),
+                r1(s["lost"]), r1(s["noop"]), f"{pct}%" if pct else "—", ms(s["t"])])
+EV_CSV = csv(["time", "Конец", "Причина", "Состояние", "Когда", "Мин", "Длительность", "Потеря", "Без оператора мин",
+              "Без оператора", "Видео"], _ev)
+STOPS_CSS = r"""
+:host{all:initial}
+#s{font-family:Inter,"Helvetica Neue",Arial,sans-serif;color:#121519;font-size:14px;line-height:20px}
+.sum{display:flex;gap:24px;padding:0 0 12px;border-bottom:1px solid #E2E6E8;color:#5F5E5A}.sum b{color:#121519;font-weight:600}
+.hd,.r{display:grid;grid-template-columns:24px minmax(160px,1.6fr) minmax(120px,1.4fr) 48px 88px 104px;align-items:center;column-gap:12px}
+.hd{font-size:12px;line-height:16px;color:#5F5E5A;padding:8px 0}
+.r{min-height:48px;border-top:1px solid #EEF1F2;cursor:pointer}.r:hover{background:#F6F8F8}
+.chev{display:grid;place-items:center;width:24px;height:24px;border-radius:4px;color:#3B4247}.r:hover .chev{background:#E2E6E8}.chev svg{width:16px;height:16px;transition:transform .15s}.open .chev svg{transform:rotate(90deg)}
+.nm{display:flex;align-items:center;gap:8px;min-width:0}.nm span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sw{width:12px;height:12px;flex:none}
+.st{font-size:12px;color:#5F5E5A}
+.bar{display:flex;align-items:center;gap:8px}.bar i{display:block;height:12px;background:#24513A}.bar em{font-style:normal;white-space:nowrap}
+.n{text-align:right;font-variant-numeric:tabular-nums}.bad{color:#C8372D}.mu{color:#5F5E5A}
+.ev{display:none;padding:0 0 8px 36px}.open+.ev{display:block}
+.e{display:grid;grid-template-columns:120px 1fr 88px 136px 32px;white-space:nowrap;align-items:center;column-gap:12px;min-height:40px;border-top:1px dashed #EEF1F2;font-size:13px}
+.e.sel{background:#EEF3FB}
+.pl{width:24px;height:24px;border-radius:50%;border:0;background:#1B4F9C;cursor:pointer;display:grid;place-items:center;padding:0}
+.pl:hover{background:#163F7D}.pl svg{width:8px;height:8px;margin-left:1px}
+"""
+
+STOPS_JS = r"""
+const H = htmlGraphics, root = htmlNode.getElementById('s'), LS = H.locationService, TS = getTemplateSrv();
+const SC = {'Стоп':'#C8372D','Пауза':'#F2C14E','Ожидание материала':'#E3C79A','Переналадка':'#CFC9EE','Тепловая защита':'#EE9A5B','Авария привода':'#7E1F1A'};
+const from = H.props.timeRange.from.valueOf(), to = H.props.timeRange.to.valueOf(), clip = +TS.replace('${clip}') || 0;
+const f = (data.series || [])[0]; if (!f) { root.textContent = 'Нет данных'; } else {
+const n = f.fields[0].values.length, ev = [];
+for (let i = 0; i < n; i++) { const r = {}; f.fields.forEach(x => r[x.name] = x.values.get ? x.values.get(i) : x.values[i]); if (r['Конец'] > from && r.time < to) ev.push(r); }
+const pad = n => String(n).padStart(2, '0');
+const dur = m => { m = Math.round(m); return m < 60 ? m + ' мин' : Math.floor(m / 60) + ' ч ' + pad(m % 60) + ' мин'; };
+const g = {};
+ev.forEach(r => { const k = r['Причина']; g[k] = g[k] || { st: r['Состояние'], m: 0, c: 0, no: 0, list: [] };
+  g[k].m += +r['Мин']; g[k].c += +r['Потеря']; g[k].no += +r['Без оператора мин']; g[k].list.push(r); });
+const G = Object.entries(g).sort((a, b) => b[1].c - a[1].c);
+const maxM = Math.max(...G.map(x => x[1].m), 1), totM = G.reduce((a, x) => a + x[1].m, 0), totC = G.reduce((a, x) => a + x[1].c, 0);
+window.__nprOpen = window.__nprOpen || new Set();
+const play = '<svg viewBox="0 0 12 12"><path d="M2 1v10l9-5z" fill="#fff"/></svg>';
+let h = '<div class="sum"><span>Остановок <b>' + ev.length + '</b></span><span>Время <b>' + dur(totM) + '</b></span><span>Не сделано <b class="bad">≈ ' + Math.round(totC) + ' карт</b></span></div>' +
+  '<div class="hd"><span></span><span>Причина</span><span>Время</span><span class="n">Раз</span><span class="n">Не сделано</span><span class="n">Без оператора</span></div>';
+G.forEach(([k, v]) => {
+  const pct = v.m ? Math.round(v.no / v.m * 100) : 0, open = window.__nprOpen.has(k);
+  h += '<div class="r' + (open ? ' open' : '') + '" data-k="' + k + '"><span class="chev"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5l4.5 4.5L6 12.5"/></svg></span>' +
+    '<span class="nm"><i class="sw" style="background:' + (SC[v.st] || '#ccc') + '"></i><span>' + k + '</span></span>' +
+    '<span class="bar"><i style="width:' + (v.m / maxM * 100 * 0.6).toFixed(1) + '%"></i><em>' + dur(v.m) + '</em></span>' +
+    '<span class="n">' + v.list.length + '</span><span class="n">≈ ' + Math.round(v.c) + '</span><span class="n' + (pct >= 50 ? ' bad' : ' mu') + '">' + (pct ? pct + '%' : '—') + '</span></div>' +
+    '<div class="ev">' + v.list.map(r => '<div class="e' + (Math.abs(r.time - clip) < 2000 ? ' sel' : '') + '"><span>' + r['Когда'] + '</span><span class="mu">' + r['Длительность'] + '</span>' +
+      '<span class="n">≈ ' + Math.round(r['Потеря']) + ' карт</span><span class="n mu">' + (r['Без оператора'] === '—' ? 'оператор был' : 'без оператора ' + r['Без оператора']) + '</span>' +
+      '<button class="pl" title="Запись камеры" data-t="' + r['Видео'] + '">' + play + '</button></div>').join('') + '</div>';
+});
+root.innerHTML = h;
+root.querySelectorAll('.r').forEach(el => el.onclick = () => { const k = el.dataset.k; window.__nprOpen.has(k) ? window.__nprOpen.delete(k) : window.__nprOpen.add(k); el.classList.toggle('open'); });
+root.querySelectorAll('.pl').forEach(b => b.onclick = e => { e.stopPropagation(); LS.partial({ 'var-clip': b.dataset.t }); });
+}
+"""
+
+
+
+def stops():
+    return {"type": "gapit-htmlgraphics-panel", "title": "Остановки", "gridPos": {"x": 0, "y": 37, "w": 14, "h": 16},
+            "targets": [q(EV_CSV)],
+            "options": {"html": '<div id="s"></div>', "css": STOPS_CSS, "onRender": STOPS_JS, "onInit": "", "rootCSS": "",
+                        "renderOnMount": True, "panelupdateOnMount": True, "dynamicData": False, "dynamicFieldDisplayValues": False,
+                        "dynamicHtmlGraphics": False, "dynamicProps": False, "centerAlignContent": False, "overflow": "visible",
+                        "useGrafanaScrollbar": True, "SVGBaseFix": True, "codeData": "{}", "calcsMutation": "standard",
+                        "onInitOnResize": False, "add100Percentage": True}}
+
+
+# ---- timeline split: states (with a states-only legend) + template / operator rows labelled on the bars ----
+TPL_SOFT = {"№12": "#D7E2F4", "№27": "#D3E9EC", "№34": "#E3DFF2"}
+
+
+def timeline_states():
+    return {"type": "state-timeline", "title": "Состояние линии", "gridPos": {"x": 0, "y": 7, "w": 24, "h": 5},
+            "targets": [q(SEG_CSV)],
+            "transformations": [hide("Конец", "Шаблон", "Причина", "Группа", "Мин", "Карт", "Потеря", "Без оператора")],
+            "fieldConfig": {"defaults": {"custom": {"fillOpacity": 100, "lineWidth": 0}, "color": fixed("#C9DCD0"),
+                                         "mappings": mapping(STATE_C)}, "overrides": []},
+            "options": {"mergeValues": True, "showValue": "never", "rowHeight": 0.85,
+                        "legend": {"showLegend": True, "displayMode": "list", "placement": "bottom"},
+                        "tooltip": {"mode": "single", "sort": "none"}}}
+
+
+def timeline_tpl_op():
+    tm = {}
+    tm.update({"переналадка": {"text": " ", "color": "#CFC9EE", "index": 10},
+               "Выходной": {"text": " ", "color": "#F1F1EE", "index": 11},
+               "У линии": {"text": " ", "color": "#E3ECE6", "index": 12},
+               "Нет у линии": {"text": " ", "color": "#5F5E5A", "index": 13}})
+    return {"type": "state-timeline", "title": "", "transparent": False, "gridPos": {"x": 0, "y": 12, "w": 24, "h": 4},
+            "targets": [q(TPL_CSV), q(OP_CSV, "B")],
+            "fieldConfig": {"defaults": {"custom": {"fillOpacity": 100, "lineWidth": 0}, "color": fixed("#E3ECE6"),
+                                         "mappings": [{"type": "value", "options": tm}] + [
+                                             {"type": "regex", "options": {"pattern": "^Шаблон " + k + " .*", "result": {"color": c, "index": 20 + i}}}
+                                             for i, (k, c) in enumerate(TPL_SOFT.items())]},
+                            "overrides": [by_name(OPN, {"id": "displayName", "value": "Оператор (тёмное — нет у линии)"})]},
+            "options": {"mergeValues": True, "showValue": "auto", "alignValue": "left", "rowHeight": 0.85,
+                        "legend": {"showLegend": False}, "tooltip": {"mode": "single", "sort": "none"}}}
+
+
+def templates_bars():
+    return {"type": "barchart", "title": "Выпуск по шаблонам, карт", "gridPos": {"x": 0, "y": 20, "w": 9, "h": 8},
+            "targets": [q(SEG_CSV)],
+            "transformations": [RANGE,
+                                {"id": "filterByValue", "options": {"type": "include", "match": "any", "filters": [
+                                    {"fieldName": "Состояние", "config": {"id": "equal", "options": {"value": "Работа"}}}]}},
+                                {"id": "groupBy", "options": {"fields": {"Шаблон": {"operation": "groupby", "aggregations": []},
+                                                                          "Карт": {"operation": "aggregate", "aggregations": ["sum"]}}}},
+                                {"id": "sortBy", "options": {"sort": [{"field": "Карт (sum)", "desc": True}]}},
+                                {"id": "organize", "options": {"excludeByName": {}, "indexByName": {}, "renameByName": {"Карт (sum)": "Сделано карт"}}}],
+            "fieldConfig": {"defaults": {"custom": {"fillOpacity": 100, "lineWidth": 0, "axisSoftMin": 0},
+                                         "unit": "locale", "decimals": 0, "color": fixed(INK),
+                                         "mappings": [{"type": "value", "options": {k: {"text": "Шаблон " + k, "index": i} for i, k in enumerate(TPL)}}]},
+                            "overrides": []},
+            "options": {"orientation": "horizontal", "xField": "Шаблон", "showValue": "always", "barWidth": 0.6, "groupWidth": 0.7, "text": {"valueSize": 14},
+                        "legend": {"showLegend": False}, "tooltip": {"mode": "single", "sort": "none"}, "xTickLabelMaxLength": 20}}
+
+
 def build():
-    p = [header(), timeline()] + kpis() + [templates(), changeovers(), reasons(), output(), journal(), camera()]
+    ks = kpis()
+    for k in ks:
+        k["gridPos"]["y"] = 16
+    out_, st_, cam = output(), stops(), camera()
+    out_["gridPos"] = {"x": 0, "y": 20, "w": 24, "h": 9}
+    st_["gridPos"] = {"x": 0, "y": 29, "w": 14, "h": 16}
+    cam["gridPos"] = {"x": 14, "y": 29, "w": 10, "h": 16}
+    p = [header(), timeline_states(), timeline_tpl_op()] + ks + [out_, st_, cam]
     for i, x in enumerate(p, 1):
         x["id"] = i
-        if i > 1:
-            x["gridPos"]["y"] += 2
         x.setdefault("datasource", DS)
     hidden = lambda name, opts, cur: {"type": "custom", "name": name, "hide": 2, "skipUrlSync": False,
                                        "query": ",".join(f"{t} : {v}" for t, v in opts),
